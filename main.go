@@ -20,29 +20,39 @@ const (
 	DEFAULT_QUALITY = 95
 )
 
-var (
-	methodIsNotDefinedError = errors.New("You must to define method")
-	widthIsNotDefinedError  = errors.New("You must to define width")
-	heightIsNotDefinedError = errors.New("You must to define height")
-	incorrectHost           = errors.New("Defined host is not correct")
-)
-
 type ErrorMessage struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-// ImaginaryParameters
-type ImaginaryParameters struct {
+type AdapterConfig struct {
+	ImaginaryHost  string
+	FilePathPrefix string
+	Host           string
+	Port           string
+	DefaultType    string
+}
+
+// ImaginaryRequestParameters
+type ImaginaryRequestParameters struct {
 	Host    string
 	File    string
 	Method  string
 	Width   int
 	Height  int
 	Quality int
+	Type    string
 }
 
-func (self *ImaginaryParameters) GetUrl() string {
+var (
+	methodIsNotDefinedError = errors.New("You must to define method")
+	widthIsNotDefinedError  = errors.New("You must to define width")
+	heightIsNotDefinedError = errors.New("You must to define height")
+	incorrectHost           = errors.New("Defined host is not correct")
+	config                  = AdapterConfig{}
+)
+
+func (self *ImaginaryRequestParameters) GetUrl() string {
 	u, err := url.Parse(self.Host)
 	if err != nil {
 		log.Panic(incorrectHost)
@@ -52,19 +62,21 @@ func (self *ImaginaryParameters) GetUrl() string {
 	values.Add("width", strconv.Itoa(self.Width))
 	values.Add("height", strconv.Itoa(self.Height))
 	values.Add("file", self.File)
+	if self.Type != "" {
+		values.Add("type", self.Type)
+	}
 	u.RawQuery = values.Encode()
-	log.Debugf(`
-Query: %v;
-Hostname: %v;
-Path: %v;
-String: %v;`, u.Query().Encode(), u.Hostname(),
-		u.EscapedPath(), u.String(),
-	)
+	log.WithFields(log.Fields{
+		"Query":    u.Query().Encode(),
+		"Hostname": u.Hostname(),
+		"Path":     u.EscapedPath(),
+		"String":   u.String(),
+	}).Debug(`Get new url`)
 	return u.String()
 }
 
-// parseRequest is function for translate incomming request to ImaginaryParameters
-func parseRequest(r *http.Request, host, prefix string) (*ImaginaryParameters, error) {
+// parseRequest is function for translate incomming request to ImaginaryRequestParameters
+func parseRequest(r *http.Request, host, prefix string) (*ImaginaryRequestParameters, error) {
 	values := r.URL.Query()
 	// method
 	method := values.Get("method")
@@ -90,64 +102,74 @@ func parseRequest(r *http.Request, host, prefix string) (*ImaginaryParameters, e
 	if prefix != "" {
 		filePath = strings.Replace(r.URL.Path, prefix, "", 1)
 	}
+	// type
+	fileType := values.Get("type")
+	if fileType == "" {
+		fileType = config.DefaultType
+	}
 
-	return &ImaginaryParameters{
+	return &ImaginaryRequestParameters{
 		Host:    host,
 		File:    filePath,
 		Method:  method,
 		Width:   width,
 		Height:  height,
 		Quality: quality,
+		Type:    fileType,
 	}, nil
+}
+
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	parameters, err := parseRequest(r, config.ImaginaryHost, config.FilePathPrefix)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"request url": r.URL.String(),
+		}).Error(err.Error())
+		jmsg := &ErrorMessage{
+			Message: err.Error(),
+			Code:    404,
+		}
+		emsg, _ := json.Marshal(jmsg)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(emsg))
+		return
+	}
+	req, _ := http.NewRequest("GET", parameters.GetUrl(), nil)
+	req.Header = r.Header.Clone()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Error("error on getting image from imaginary", err)
+	}
+	if _, err := io.Copy(w, res.Body); err != nil {
+		log.Error("error on write response", err)
+	}
 }
 
 func main() {
 	log.SetLevel(log.TraceLevel)
 	// settings
-	imaginaryHost := os.Getenv("ADAPTER_IMAGINARY_HOST")
-	if imaginaryHost == "" {
+	config.ImaginaryHost = os.Getenv("ADAPTER_IMAGINARY_HOST")
+	if config.ImaginaryHost == "" {
 		log.Fatal("ADAPTER_IMAGINARY_HOST is not defined")
 	}
-	filePathPrefix := os.Getenv("ADAPTER_FILE_PATH_PREFIX")
-	port := os.Getenv("ADAPTER_PORT")
-	if port == "" {
-		port = "9000"
+	config.FilePathPrefix = os.Getenv("ADAPTER_FILE_PATH_PREFIX")
+	config.Port = os.Getenv("ADAPTER_PORT")
+	if config.Port == "" {
+		config.Port = "9000"
 	}
-	host := os.Getenv("ADAPTER_HOST")
-	if host == "" {
-		host = "0.0.0.0"
+	config.Host = os.Getenv("ADAPTER_HOST")
+	if config.Host == "" {
+		config.Host = "0.0.0.0"
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		parameters, err := parseRequest(r, imaginaryHost, filePathPrefix)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"request url": r.URL.String(),
-			}).Error(err.Error())
-			jmsg := &ErrorMessage{
-				Message: err.Error(),
-				Code:    404,
-			}
-			emsg, _ := json.Marshal(jmsg)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(emsg))
-			return
-		}
-		res, err := http.Get(parameters.GetUrl())
-		if err != nil {
-			log.Fatal(err)
-		}
-		if _, err := io.Copy(w, res.Body); err != nil {
-			log.Fatal(err)
-		}
-	})
+	http.HandleFunc("/", proxyHandler)
 	log.Debugf(`
 Starting server:  %v:%v;
 Imaginary host:   %v;
 File path prefix: %v
-	`, host, port, imaginaryHost, filePathPrefix)
+	`, config.Host, config.Port, config.ImaginaryHost, config.FilePathPrefix)
 	s := &http.Server{
-		Addr:         fmt.Sprintf("%v:%v", host, port),
+		Addr:         fmt.Sprintf("%v:%v", config.Host, config.Port),
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
 	}
