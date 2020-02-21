@@ -120,6 +120,7 @@ func parseRequest(r *http.Request, host, prefix string) (*ImaginaryRequestParame
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	parameters, err := parseRequest(r, config.ImaginaryHost, config.FilePathPrefix)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -143,7 +144,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	if written, err := io.Copy(w, res.Body); err != nil {
 		log.Errorf("error on write response; msg: '%s'", err)
 	} else {
-		log.Debugf("successful copied %d bytes for request: %s", written, r.URL.Path)
+		log.WithFields(log.Fields{
+			"Length": written,
+			"Url":    r.URL.Path,
+			"Time":   time.Since(startTime),
+		}).Debug("successful response")
 	}
 }
 
@@ -172,8 +177,8 @@ File path prefix: %v
 	`, config.Host, config.Port, config.ImaginaryHost, config.FilePathPrefix)
 	s := &http.Server{
 		Addr:         fmt.Sprintf("%v:%v", config.Host, config.Port),
-		ReadTimeout:  time.Second * 30,
-		WriteTimeout: time.Second * 30,
+		ReadTimeout:  time.Second * 60,
+		WriteTimeout: time.Second * 60,
 	}
 	err := s.ListenAndServe()
 	if err != nil {
