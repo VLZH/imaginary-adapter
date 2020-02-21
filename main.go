@@ -71,7 +71,7 @@ func (self *ImaginaryRequestParameters) GetUrl() string {
 		"Hostname": u.Hostname(),
 		"Path":     u.EscapedPath(),
 		"String":   u.String(),
-	}).Debug(`Get new url`)
+	}).Debug(`get new url`)
 	return u.String()
 }
 
@@ -138,10 +138,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	req.Header = r.Header.Clone()
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Error("error on getting image from imaginary", err)
+		log.Errorf("error on getting image from imaginary; msg:'%s'", err)
 	}
-	if _, err := io.Copy(w, res.Body); err != nil {
-		log.Error("error on write response", err)
+	if written, err := io.Copy(w, res.Body); err != nil {
+		log.Errorf("error on write response; msg: '%s'", err)
+	} else {
+		log.Debugf("successful copied %d bytes for request: %s", written, r.URL.Path)
 	}
 }
 
@@ -170,8 +172,11 @@ File path prefix: %v
 	`, config.Host, config.Port, config.ImaginaryHost, config.FilePathPrefix)
 	s := &http.Server{
 		Addr:         fmt.Sprintf("%v:%v", config.Host, config.Port),
-		ReadTimeout:  time.Second * 10,
-		WriteTimeout: time.Second * 10,
+		ReadTimeout:  time.Second * 30,
+		WriteTimeout: time.Second * 30,
 	}
-	log.Fatal(s.ListenAndServe())
+	err := s.ListenAndServe()
+	if err != nil {
+		log.Fatalf("fatal error of server; msg: {%s}", err.Error())
+	}
 }

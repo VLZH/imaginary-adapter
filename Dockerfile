@@ -1,4 +1,4 @@
-FROM golang
+FROM golang:alpine
 
 WORKDIR ${GOPATH}/src/github.com/h2non/imaginary
 COPY . .
