@@ -168,13 +168,18 @@ func main() {
 	if config.Host == "" {
 		config.Host = "0.0.0.0"
 	}
+	config.DefaultType = os.Getenv("ADAPTER_DEFAULT_TYPE")
 
 	http.HandleFunc("/", proxyHandler)
-	log.Debugf(`
-Starting server:  %v:%v;
-Imaginary host:   %v;
-File path prefix: %v
-	`, config.Host, config.Port, config.ImaginaryHost, config.FilePathPrefix)
+
+	log.WithFields(log.Fields{
+		"Host":             config.Host,
+		"Port":             config.Port,
+		"Imaginary host":   config.ImaginaryHost,
+		"File path prefix": config.FilePathPrefix,
+		"Default type":     config.DefaultType,
+	}).Debug("server starting")
+
 	s := &http.Server{
 		Addr:         fmt.Sprintf("%v:%v", config.Host, config.Port),
 		ReadTimeout:  time.Second * 60,
